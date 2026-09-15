@@ -1,0 +1,19 @@
+{
+  "name": "FocusDock 学习时间管理",
+  "short_name": "FocusDock",
+  "description": "计划、计时、应用使用、进度统计与奖励兑换的本地优先学习管理 Demo。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#06101d",
+  "theme_color": "#07111f",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
