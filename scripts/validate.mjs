@@ -33,8 +33,14 @@ for (const asset of ["./", "./index.html", "./styles.css", "./app.js", "./favico
   if (!worker.includes(`"${asset}"`)) throw new Error(`Service worker does not cache ${asset}`);
 }
 
-for (const expected of ["taskDialog", "encouragementDialog", "moduleBarChart", "moduleDonut", "rewardGrid", "dailyNote"]) {
+for (const expected of ["taskDialog", "encouragementDialog", "moduleBarChart", "moduleDonut", "rewardGrid", "dailyNote", "dayBoundaryNotice", "showOverdueButton"]) {
   if (!ids.includes(expected)) throw new Error(`Required interface element is missing: ${expected}`);
 }
+
+for (const expectedLogic of ["const STATE_VERSION = 2", "rollStateToDate", "overdueTasks", "carryTaskToToday", "tasksInPeriod"]) {
+  if (!app.includes(expectedLogic)) throw new Error(`Cross-day logic is missing: ${expectedLogic}`);
+}
+
+if (!worker.includes('focusdock-demo-v2')) throw new Error("Service worker cache version was not updated");
 
 console.log(`FocusDock validation passed: ${required.length} assets, ${ids.length} unique IDs, ${new Set(selectorIds).size} wired selectors.`);

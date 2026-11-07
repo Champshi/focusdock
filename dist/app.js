@@ -1,35 +1,6 @@
 const STORAGE_KEY = "focusdock-demo-v1";
+const STATE_VERSION = 2;
 const MODULE_COLORS = ["#65e6dc", "#74a7ff", "#ffbd67", "#a98cff", "#72dda5", "#ff7668"];
-const PERIOD_DATA = {
-  week: [
-    { module: "COMP9123", planned: 420, actual: 385 },
-    { module: "STAT5003", planned: 300, actual: 332 },
-    { module: "COMP5310", planned: 240, actual: 198 },
-    { module: "阅读", planned: 180, actual: 206 },
-    { module: "生活", planned: 150, actual: 128 }
-  ],
-  month: [
-    { module: "COMP9123", planned: 1680, actual: 1572 },
-    { module: "STAT5003", planned: 1320, actual: 1406 },
-    { module: "COMP5310", planned: 1080, actual: 947 },
-    { module: "阅读", planned: 720, actual: 812 },
-    { module: "生活", planned: 600, actual: 584 }
-  ]
-};
-
-const TREND_DATA = {
-  day: [
-    { label: "08", value: 20 }, { label: "10", value: 51 }, { label: "12", value: 73 },
-    { label: "14", value: 116 }, { label: "16", value: 155 }, { label: "18", value: 155 }
-  ],
-  week: [
-    { label: "一", value: 192 }, { label: "二", value: 248 }, { label: "三", value: 176 },
-    { label: "四", value: 225 }, { label: "五", value: 198 }, { label: "六", value: 272 }, { label: "日", value: 155 }
-  ],
-  month: [
-    { label: "W1", value: 1080 }, { label: "W2", value: 1265 }, { label: "W3", value: 1144 }, { label: "W4", value: 1328 }
-  ]
-};
 
 const ENCOURAGEMENTS = [
   ["做得漂亮。", "你又把一个计划变成了事实。"],
@@ -42,6 +13,7 @@ const ENCOURAGEMENTS = [
 let state = loadState();
 let activeTaskFilter = "all";
 let activePeriod = "day";
+let activeDateKey = localDateKey();
 let tickCounter = 0;
 let noteSaveTimer = null;
 let monitorActiveSeconds = 0;
@@ -73,9 +45,16 @@ function offsetFromNow(minutes) {
   return new Date(Date.now() + minutes * 60_000).toISOString();
 }
 
+function dailyNoteTemplate(dateKey = localDateKey()) {
+  return `# ${dateKey}\n\n## 今日三件事\n- [ ] \n- [ ] \n- [ ] \n\n## 学习记录\n\n## 晚间复盘\n完成：\n阻碍：\n明天调整：\n`;
+}
+
 function createInitialState() {
+  const todayKey = localDateKey();
+  const initialNote = `# ${todayKey}\n\n## 今日三件事\n- [ ] 完成 Dynamic Programming 练习\n- [ ] 整理统计学 Lecture 4 笔记\n- [ ] 慢跑与拉伸\n\n## 学习记录\n### COMP9123\n状态转移要先写清楚“当前状态代表什么”，再决定遍历顺序。\n\n## 晚间复盘\n完成：\n阻碍：\n明天调整：\n`;
   return {
-    version: 1,
+    version: STATE_VERSION,
+    lastActiveDateKey: todayKey,
     tasks: [
       {
         id: "dp",
@@ -193,6 +172,7 @@ function createInitialState() {
       { id: "music", name: "Music", short: "♪", minutes: 6, category: "neutral", color: "#a98cff" }
     ],
     appMonitor: { running: false, elapsedSeconds: 0 },
+    appUsageHistory: {},
     settings: { dailyGoalMinutes: 240, rewardMode: true, reminderMode: true },
     points: 86,
     rewards: [
@@ -208,8 +188,104 @@ function createInitialState() {
     ],
     rewardedGoalDates: [localDateKey(new Date(Date.now() - 86_400_000))],
     remindersSeen: {},
-    dailyNote: `# ${localDateKey()}\n\n## 今日三件事\n- [ ] 完成 Dynamic Programming 练习\n- [ ] 整理统计学 Lecture 4 笔记\n- [ ] 慢跑与拉伸\n\n## 学习记录\n### COMP9123\n状态转移要先写清楚“当前状态代表什么”，再决定遍历顺序。\n\n## 晚间复盘\n完成：\n阻碍：\n明天调整：\n`
+    dailyNotes: { [todayKey]: initialNote },
+    dailyNote: initialNote
   };
+}
+
+function dateKeyFromValue(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : localDateKey(date);
+}
+
+function inferStateDate(savedState) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(savedState.lastActiveDateKey || "")) return savedState.lastActiveDateKey;
+  const selected = savedState.tasks?.find((task) => task.id === savedState.timer?.taskId);
+  const selectedKey = dateKeyFromValue(selected?.startAt);
+  if (selectedKey) return selectedKey;
+  const counts = new Map();
+  (savedState.tasks || []).forEach((task) => {
+    const key = dateKeyFromValue(task.startAt);
+    if (key) counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0]))[0]?.[0] || localDateKey();
+}
+
+function archiveAppUsage(savedState, dateKey) {
+  if (!dateKey || savedState.appUsageHistory?.[dateKey]) return;
+  const entries = (savedState.apps || []).filter((app) => Number(app.minutes) > 0).map((app) => ({
+    id: app.id,
+    name: app.name,
+    minutes: Number(app.minutes) || 0,
+    category: app.category
+  }));
+  if (entries.length) savedState.appUsageHistory[dateKey] = entries;
+}
+
+function rollStateToDate(savedState, nextDateKey) {
+  const previousDateKey = inferStateDate(savedState);
+  if (previousDateKey === nextDateKey) {
+    savedState.lastActiveDateKey = nextDateKey;
+    return false;
+  }
+
+  archiveAppUsage(savedState, previousDateKey);
+  savedState.apps.forEach((app) => { app.minutes = 0; });
+  savedState.appMonitor = { running: false, elapsedSeconds: 0 };
+  savedState.dailyNotes[previousDateKey] ||= savedState.dailyNote || dailyNoteTemplate(previousDateKey);
+  savedState.dailyNotes[nextDateKey] ||= dailyNoteTemplate(nextDateKey);
+  savedState.dailyNote = savedState.dailyNotes[nextDateKey];
+  savedState.lastActiveDateKey = nextDateKey;
+  savedState.lastRollover = {
+    from: previousDateKey,
+    to: nextDateKey,
+    at: new Date().toISOString(),
+    overdueCount: savedState.tasks.filter((task) => !task.done && !task.archived && dateKeyFromValue(task.startAt) < nextDateKey).length
+  };
+  return true;
+}
+
+function normalizeState(savedState) {
+  const defaults = createInitialState();
+  const previousDateKey = inferStateDate(savedState);
+  const normalized = {
+    ...defaults,
+    ...savedState,
+    version: STATE_VERSION,
+    lastActiveDateKey: previousDateKey,
+    tasks: Array.isArray(savedState.tasks) ? savedState.tasks : [],
+    apps: Array.isArray(savedState.apps) ? savedState.apps : defaults.apps,
+    rewards: Array.isArray(savedState.rewards) ? savedState.rewards : defaults.rewards,
+    ledger: Array.isArray(savedState.ledger) ? savedState.ledger : [],
+    rewardedGoalDates: Array.isArray(savedState.rewardedGoalDates) ? savedState.rewardedGoalDates : [],
+    remindersSeen: savedState.remindersSeen && typeof savedState.remindersSeen === "object" ? savedState.remindersSeen : {},
+    settings: { ...defaults.settings, ...(savedState.settings || {}) },
+    timer: { ...defaults.timer, ...(savedState.timer || {}) },
+    appMonitor: { ...defaults.appMonitor, ...(savedState.appMonitor || {}) },
+    appUsageHistory: savedState.appUsageHistory && typeof savedState.appUsageHistory === "object" ? savedState.appUsageHistory : {},
+    dailyNotes: savedState.dailyNotes && typeof savedState.dailyNotes === "object" ? savedState.dailyNotes : {}
+  };
+
+  normalized.tasks.forEach((task) => {
+    if (!task.kind) task.kind = task.module?.startsWith("生活") ? "life" : task.module === "规划" ? "planning" : "study";
+    task.archived = Boolean(task.archived);
+  });
+  normalized.dailyNotes[previousDateKey] ||= savedState.dailyNote || dailyNoteTemplate(previousDateKey);
+  normalized.dailyNote = normalized.dailyNotes[previousDateKey];
+
+  const selectedTask = normalized.tasks.find((task) => task.id === normalized.timer.taskId);
+  normalized.timer.elapsedSeconds = Number(selectedTask?.actualSeconds) || Number(normalized.timer.elapsedSeconds) || 0;
+  normalized.timer.running = false;
+  normalized.timer.lastStartedAt = null;
+  normalized.appMonitor.running = false;
+  rollStateToDate(normalized, localDateKey());
+
+  const currentTask = normalized.tasks.find((task) => task.id === normalized.timer.taskId);
+  if (!currentTask || currentTask.done || currentTask.archived || dateKeyFromValue(currentTask.startAt) !== localDateKey()) {
+    normalized.timer.taskId = null;
+    normalized.timer.elapsedSeconds = 0;
+  }
+  return normalized;
 }
 
 function loadState() {
@@ -217,20 +293,17 @@ function loadState() {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return createInitialState();
     const parsed = JSON.parse(saved);
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.tasks)) return createInitialState();
-    parsed.tasks.forEach((task) => {
-      if (!task.kind) task.kind = task.module?.startsWith("生活") ? "life" : task.module === "规划" ? "planning" : "study";
-    });
-    parsed.timer.running = false;
-    parsed.timer.lastStartedAt = null;
-    parsed.appMonitor.running = false;
-    return parsed;
+    if (!parsed || ![1, STATE_VERSION].includes(parsed.version) || !Array.isArray(parsed.tasks)) return createInitialState();
+    const normalized = normalizeState(parsed);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
   } catch {
     return createInitialState();
   }
 }
 
 function saveState() {
+  state.version = STATE_VERSION;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
@@ -271,43 +344,76 @@ function formatShortDate(iso) {
   return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
 }
 
+function formatDay(iso) {
+  if (!iso) return "未安排";
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(iso));
+}
+
 function taskActualMinutes(task) {
   return (Number(task.actualSeconds) || 0) / 60;
 }
 
-function totalActualMinutes(studyOnly = true) {
-  return state.tasks.filter((task) => !studyOnly || task.kind === "study").reduce((sum, task) => sum + taskActualMinutes(task), 0);
+function taskDateKey(task) {
+  return dateKeyFromValue(task?.startAt);
 }
 
-function totalPlannedMinutes(studyOnly = false) {
-  return state.tasks.filter((task) => !studyOnly || task.kind === "study").reduce((sum, task) => sum + Number(task.plannedMinutes || 0), 0);
+function tasksForDate(dateKey = localDateKey()) {
+  return state.tasks.filter((task) => !task.archived && taskDateKey(task) === dateKey);
 }
 
-function weightedProgress() {
-  const planned = totalPlannedMinutes();
+function todayTasks() {
+  return tasksForDate(localDateKey());
+}
+
+function overdueTasks() {
+  const todayKey = localDateKey();
+  return state.tasks.filter((task) => !task.done && !task.archived && taskDateKey(task) && taskDateKey(task) < todayKey);
+}
+
+function scheduledTasks() {
+  const todayKey = localDateKey();
+  return state.tasks.filter((task) => !task.archived && taskDateKey(task) && taskDateKey(task) > todayKey);
+}
+
+function historicalTasks() {
+  const todayKey = localDateKey();
+  return state.tasks.filter((task) => task.archived || (task.done && taskDateKey(task) && taskDateKey(task) < todayKey));
+}
+
+function totalActualMinutes(tasks = todayTasks(), studyOnly = true) {
+  return tasks.filter((task) => !studyOnly || task.kind === "study").reduce((sum, task) => sum + taskActualMinutes(task), 0);
+}
+
+function totalPlannedMinutes(tasks = todayTasks(), studyOnly = false) {
+  return tasks.filter((task) => !studyOnly || task.kind === "study").reduce((sum, task) => sum + Number(task.plannedMinutes || 0), 0);
+}
+
+function weightedProgress(tasks = todayTasks()) {
+  const planned = totalPlannedMinutes(tasks);
   if (!planned) return 0;
-  return Math.round(state.tasks.reduce((sum, task) => sum + task.progress * task.plannedMinutes, 0) / planned);
+  return Math.round(tasks.reduce((sum, task) => sum + task.progress * task.plannedMinutes, 0) / planned);
 }
 
 function getCurrentTask() {
-  const selected = state.tasks.find((task) => task.id === state.timer.taskId);
-  return (selected && !selected.done ? selected : null) || state.tasks.find((task) => !task.done) || null;
+  const currentTasks = todayTasks();
+  const selected = currentTasks.find((task) => task.id === state.timer.taskId);
+  return (selected && !selected.done ? selected : null) || currentTasks.find((task) => !task.done) || null;
 }
 
-function currentTimerSeconds() {
+function currentTimerSeconds(atTime = Date.now()) {
   if (!state.timer.running || !state.timer.lastStartedAt) return state.timer.elapsedSeconds;
-  return state.timer.elapsedSeconds + Math.floor((Date.now() - state.timer.lastStartedAt) / 1000);
+  return state.timer.elapsedSeconds + Math.max(0, Math.floor((atTime - state.timer.lastStartedAt) / 1000));
 }
 
-function syncTimerToTask() {
+function syncTimerToTask(atTime = Date.now()) {
   const task = state.tasks.find((item) => item.id === state.timer.taskId);
   if (!task) return;
-  task.actualSeconds = currentTimerSeconds();
+  task.actualSeconds = currentTimerSeconds(atTime);
 }
 
-function groupTaskData() {
+function groupTaskData(tasks = todayTasks()) {
   const grouped = new Map();
-  state.tasks.filter((task) => task.kind === "study").forEach((task) => {
+  tasks.filter((task) => task.kind === "study").forEach((task) => {
     const key = task.module || "其他";
     if (!grouped.has(key)) grouped.set(key, { module: key, planned: 0, actual: 0 });
     const entry = grouped.get(key);
@@ -315,6 +421,57 @@ function groupTaskData() {
     entry.actual += taskActualMinutes(task);
   });
   return [...grouped.values()].sort((a, b) => b.actual - a.actual).slice(0, 6);
+}
+
+function dateKeyOffset(dateKey, days) {
+  const date = new Date(`${dateKey}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return localDateKey(date);
+}
+
+function currentWeekStartKey() {
+  const now = new Date();
+  const mondayOffset = (now.getDay() + 6) % 7;
+  now.setDate(now.getDate() - mondayOffset);
+  return localDateKey(now);
+}
+
+function tasksInPeriod(period) {
+  const todayKey = localDateKey();
+  if (period === "day") return todayTasks();
+  if (period === "week") {
+    const startKey = currentWeekStartKey();
+    const endKey = dateKeyOffset(startKey, 7);
+    return state.tasks.filter((task) => taskDateKey(task) >= startKey && taskDateKey(task) < endKey);
+  }
+  const monthPrefix = todayKey.slice(0, 7);
+  return state.tasks.filter((task) => taskDateKey(task)?.startsWith(monthPrefix));
+}
+
+function trendData(period, tasks = tasksInPeriod(period)) {
+  if (period === "day") {
+    const buckets = [0, 4, 8, 12, 16, 20].map((hour) => ({ label: String(hour).padStart(2, "0"), value: 0 }));
+    tasks.filter((task) => task.kind === "study").forEach((task) => {
+      const hour = new Date(task.startAt).getHours();
+      const index = Math.min(buckets.length - 1, Math.floor(hour / 4));
+      buckets[index].value += taskActualMinutes(task);
+    });
+    return buckets;
+  }
+  if (period === "week") {
+    const startKey = currentWeekStartKey();
+    const labels = ["一", "二", "三", "四", "五", "六", "日"];
+    return labels.map((label, index) => {
+      const key = dateKeyOffset(startKey, index);
+      const value = tasks.filter((task) => task.kind === "study" && taskDateKey(task) === key).reduce((sum, task) => sum + taskActualMinutes(task), 0);
+      return { label, value };
+    });
+  }
+  const weeksInMonth = 5;
+  return Array.from({ length: weeksInMonth }, (_, index) => {
+    const value = tasks.filter((task) => task.kind === "study" && Math.floor((new Date(task.startAt).getDate() - 1) / 7) === index).reduce((sum, task) => sum + taskActualMinutes(task), 0);
+    return { label: `W${index + 1}`, value };
+  });
 }
 
 function studyAppStats() {
@@ -354,12 +511,13 @@ function safeShowModal(dialog) {
 
 function renderSummary() {
   syncTimerToTask();
-  const actual = totalActualMinutes();
+  const currentTasks = todayTasks();
+  const actual = totalActualMinutes(currentTasks);
   const dailyGoal = state.settings.dailyGoalMinutes;
   const goalPercent = dailyGoal ? Math.round((actual / dailyGoal) * 100) : 0;
-  const progress = weightedProgress();
-  const completed = state.tasks.filter((task) => task.done).length;
-  const remaining = state.tasks.length - completed;
+  const progress = weightedProgress(currentTasks);
+  const completed = currentTasks.filter((task) => task.done).length;
+  const remaining = currentTasks.length - completed;
   const nextReward = [...state.rewards].sort((a, b) => a.cost - b.cost).find((reward) => reward.cost > state.points) || state.rewards[0];
   const gap = Math.max(0, nextReward.cost - state.points);
 
@@ -373,28 +531,47 @@ function renderSummary() {
   document.querySelector("#pointsToReward").textContent = gap ? `${gap} pts` : "可兑换";
   document.querySelector("#rewardGlanceGap").textContent = gap ? `${gap} 积分` : "现在可兑换";
   document.querySelector("#rewardGlanceBar").style.width = `${Math.min(100, Math.round((state.points / nextReward.cost) * 100))}%`;
-  const weeklyPlanned = PERIOD_DATA.week.reduce((sum, item) => sum + item.planned, 0);
-  const weeklyActual = PERIOD_DATA.week.reduce((sum, item) => sum + item.actual, 0);
-  document.querySelector("#weeklyRhythm").textContent = `${Math.min(130, Math.round((weeklyActual / weeklyPlanned) * 100))}%`;
+  const weekTasks = tasksInPeriod("week");
+  const weeklyPlanned = totalPlannedMinutes(weekTasks, true);
+  const weeklyActual = totalActualMinutes(weekTasks, true);
+  const weeklyPercent = weeklyPlanned ? Math.round((weeklyActual / weeklyPlanned) * 100) : 0;
+  document.querySelector("#weeklyRhythm").textContent = `${Math.min(999, weeklyPercent)}%`;
+  document.querySelector("#weeklyRhythmHint").textContent = weeklyPlanned
+    ? `本周实际 ${formatDuration(weeklyActual, true)} / 计划 ${formatDuration(weeklyPlanned, true)}`
+    : "本周还没有学习计划";
+
+  const overdueCount = overdueTasks().length;
+  const notice = document.querySelector("#dayBoundaryNotice");
+  notice.hidden = overdueCount === 0;
+  if (overdueCount) {
+    document.querySelector("#dayBoundaryTitle").textContent = `有 ${overdueCount} 项过往计划尚未完成`;
+    document.querySelector("#dayBoundaryMessage").textContent = "它们已移入逾期区，不会计入今天的时间和完成度。";
+  }
 }
 
 function renderFocus() {
   syncTimerToTask();
   const task = getCurrentTask();
   if (!task) {
+    const hasTodayTasks = todayTasks().length > 0;
     document.querySelector("#focusModule").textContent = "TODAY";
-    document.querySelector("#focusTaskTitle").textContent = "今天的任务都完成了";
-    document.querySelector("#focusTaskMeta").textContent = "现在可以安心休息，或者添加一个轻量计划。";
+    document.querySelector("#focusTaskTitle").textContent = hasTodayTasks ? "今天的任务都完成了" : "今天还没有计划";
+    document.querySelector("#focusTaskMeta").textContent = hasTodayTasks ? "现在可以安心休息，或者添加一个轻量计划。" : "添加一个新计划，或从逾期区移入今天。";
     document.querySelector("#timerDisplay").textContent = "00:00";
     document.querySelector("#focusProgressBar").style.width = "100%";
     document.querySelector("#focusProgressLabel").textContent = "100% 今日清单";
     document.querySelector("#timerToggleButton").disabled = true;
     document.querySelector("#finishFocusButton").disabled = true;
-    document.querySelector("#menuBarText").textContent = "✓ 今日计划已完成";
+    document.querySelector("#menuPauseButton").disabled = true;
+    const status = document.querySelector(".status-pill");
+    status.innerHTML = "<i></i> 今日尚未开始";
+    status.classList.add("paused");
+    document.querySelector("#menuBarText").textContent = hasTodayTasks ? "✓ 今日计划已完成" : "◫ 今天还没有计划";
     return;
   }
   document.querySelector("#timerToggleButton").disabled = false;
   document.querySelector("#finishFocusButton").disabled = false;
+  document.querySelector("#menuPauseButton").disabled = false;
   if (state.timer.taskId !== task.id && !state.timer.running) {
     state.timer.taskId = task.id;
     state.timer.elapsedSeconds = Number(task.actualSeconds) || 0;
@@ -418,29 +595,54 @@ function renderFocus() {
 }
 
 function renderTasks() {
-  const filtered = state.tasks.filter((task) => activeTaskFilter === "all" || (activeTaskFilter === "done" ? task.done : !task.done));
+  const currentTasks = todayTasks();
+  const views = {
+    all: { eyebrow: "TODAY", title: "今日计划", tasks: currentTasks },
+    pending: { eyebrow: "TODAY · PENDING", title: "今日待完成", tasks: currentTasks.filter((task) => !task.done) },
+    done: { eyebrow: "TODAY · DONE", title: "今日已完成", tasks: currentTasks.filter((task) => task.done) },
+    overdue: { eyebrow: "OVERDUE", title: "逾期任务", tasks: overdueTasks() },
+    scheduled: { eyebrow: "UPCOMING", title: "未来计划", tasks: scheduledTasks() },
+    history: { eyebrow: "HISTORY", title: "历史记录", tasks: historicalTasks() }
+  };
+  const view = views[activeTaskFilter] || views.all;
+  const filtered = [...view.tasks].sort((a, b) => activeTaskFilter === "history"
+    ? new Date(b.completedAt || b.carriedForwardAt || b.startAt) - new Date(a.completedAt || a.carriedForwardAt || a.startAt)
+    : new Date(a.startAt) - new Date(b.startAt));
   const container = document.querySelector("#taskList");
+  document.querySelector("#taskPanelEyebrow").textContent = view.eyebrow;
+  document.querySelector("#taskPanelTitle").textContent = view.title;
   if (!filtered.length) {
-    container.innerHTML = `<div class="empty-state"><strong>这里暂时没有任务</strong><p>切换筛选条件或添加一个新计划。</p></div>`;
+    const emptyCopy = activeTaskFilter === "overdue"
+      ? ["没有逾期任务", "过往未完成计划会安全地保留在这里。"]
+      : activeTaskFilter === "scheduled"
+        ? ["没有未来计划", "设置未来日期的任务会显示在这里。"]
+      : activeTaskFilter === "history"
+        ? ["还没有历史记录", "完成或顺延的往日计划会显示在这里。"]
+        : ["这里暂时没有任务", "添加今天的计划，或从逾期区顺延一项。"];
+    container.innerHTML = `<div class="empty-state"><strong>${emptyCopy[0]}</strong><p>${emptyCopy[1]}</p></div>`;
     return;
   }
   container.innerHTML = filtered.map((task) => `
-    <article class="task-row ${task.done ? "done" : ""}" data-task-id="${escapeHTML(task.id)}">
-      <button class="task-check ${task.done ? "checked" : ""}" data-action="toggle-task" aria-label="${task.done ? "标记为未完成" : "标记为已完成"}">${task.done ? "✓" : ""}</button>
+    <article class="task-row ${task.done ? "done" : ""} ${activeTaskFilter === "overdue" ? "overdue" : ""} ${task.archived ? "archived" : ""}" data-task-id="${escapeHTML(task.id)}">
+      ${task.archived
+        ? `<span class="task-check checked" aria-label="已顺延">↺</span>`
+        : `<button class="task-check ${task.done ? "checked" : ""}" data-action="toggle-task" aria-label="${task.done ? "标记为未完成" : "标记为已完成"}">${task.done ? "✓" : ""}</button>`}
       <button class="task-copy task-edit-button" data-action="edit-task">
         <strong>${escapeHTML(task.title)}</strong>
-        <small>${taskKindLabel(task.kind)} · ${escapeHTML(taskModuleLabel(task))} · 计划 ${task.plannedMinutes} 分钟 · 实际 ${Math.round(taskActualMinutes(task))} 分钟</small>
+        <small>${task.archived ? "已顺延 · " : ""}${taskKindLabel(task.kind)} · ${escapeHTML(taskModuleLabel(task))} · 计划 ${task.plannedMinutes} 分钟 · 实际 ${Math.round(taskActualMinutes(task))} 分钟</small>
       </button>
       <div class="task-side">
-        <span class="task-time">${formatTime(task.startAt)}</span>
+        <span class="task-time">${["overdue", "scheduled", "history"].includes(activeTaskFilter) ? formatDay(task.startAt) : formatTime(task.startAt)}</span>
         <span class="progress-chip">${task.progress}%</span>
-        ${task.done ? "" : `<button class="task-start" data-action="start-task" aria-label="开始${escapeHTML(task.title)}">▶</button>`}
+        ${activeTaskFilter === "overdue"
+          ? `<button class="carry-task-button" data-action="carry-task" aria-label="将${escapeHTML(task.title)}移至今天">移至今天</button>`
+          : task.done || task.archived || ["scheduled", "history"].includes(activeTaskFilter) ? "" : `<button class="task-start" data-action="start-task" aria-label="开始${escapeHTML(task.title)}">▶</button>`}
       </div>
     </article>`).join("");
 }
 
 function renderUpcoming() {
-  const pending = state.tasks.filter((task) => !task.done && task.id !== state.timer.taskId).sort((a, b) => new Date(a.startAt) - new Date(b.startAt)).slice(0, 3);
+  const pending = todayTasks().filter((task) => !task.done && task.id !== state.timer.taskId).sort((a, b) => new Date(a.startAt) - new Date(b.startAt)).slice(0, 3);
   document.querySelector("#upcomingTimeline").innerHTML = pending.length ? pending.map((task) => `
     <div class="timeline-item">
       <span class="timeline-time">${formatTime(task.startAt)}</span>
@@ -515,15 +717,16 @@ function renderAppUsage() {
 }
 
 function analyticsData(period) {
-  return period === "day" ? groupTaskData() : PERIOD_DATA[period];
+  return groupTaskData(tasksInPeriod(period));
 }
 
 function renderAnalytics() {
+  const periodTasks = tasksInPeriod(activePeriod);
   const data = analyticsData(activePeriod);
   const planned = data.reduce((sum, item) => sum + item.planned, 0);
   const actual = data.reduce((sum, item) => sum + item.actual, 0);
-  const completion = activePeriod === "day" ? weightedProgress() : activePeriod === "week" ? 78 : 81;
-  const taskLabel = activePeriod === "day" ? `${state.tasks.filter((task) => task.done).length} / ${state.tasks.length} 项完成` : activePeriod === "week" ? "18 / 23 项完成" : "76 / 94 项完成";
+  const completion = weightedProgress(periodTasks);
+  const taskLabel = `${periodTasks.filter((task) => task.done).length} / ${periodTasks.length} 项完成`;
   document.querySelector("#analyticsActual").textContent = formatDuration(actual, true);
   document.querySelector("#analyticsPlanned").textContent = `/ ${formatDuration(planned, true)}`;
   document.querySelector("#analyticsCompletion").textContent = `${completion}%`;
@@ -531,13 +734,17 @@ function renderAnalytics() {
   document.querySelector("#analyticsDelta").textContent = actual >= planned ? `超过计划 ${formatDuration(actual - planned, true)}` : `距离计划 ${formatDuration(planned - actual, true)}`;
   renderBarChart(data);
   renderDonutChart(data);
-  renderTrendChart(TREND_DATA[activePeriod]);
+  renderTrendChart(trendData(activePeriod, periodTasks));
 }
 
 function renderBarChart(data) {
   const max = Math.max(1, ...data.flatMap((item) => [item.planned, item.actual]));
   const container = document.querySelector("#moduleBarChart");
   container.style.setProperty("--bar-count", data.length);
+  if (!data.length) {
+    container.innerHTML = `<div class="empty-state"><strong>暂无可统计的学习任务</strong><p>添加计划并开始计时后，这里会自动生成图表。</p></div>`;
+    return;
+  }
   container.innerHTML = data.map((item) => `
     <div class="bar-group">
       <div class="bar-column plan" style="height:${Math.max(2, (item.planned / max) * 88)}%" data-value="计划 ${Math.round(item.planned)} 分钟"></div>
@@ -580,8 +787,11 @@ function renderTrendChart(data) {
       <polyline points="${polyline}" fill="none" stroke="#65e6dc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
       ${points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#0d1d30" stroke="#65e6dc" stroke-width="2" vector-effect="non-scaling-stroke"/><text x="${point.x}" y="${height - 4}" text-anchor="middle">${escapeHTML(point.label)}</text>`).join("")}
     </svg>`;
+  const total = data.reduce((sum, item) => sum + item.value, 0);
   const average = data.reduce((sum, item) => sum + item.value, 0) / data.length;
-  document.querySelector("#trendAverage").textContent = activePeriod === "month" ? `周均 ${formatDuration(average, true)}` : `${activePeriod === "week" ? "日均" : "当前"} ${formatDuration(average, true)}`;
+  document.querySelector("#trendAverage").textContent = activePeriod === "day"
+    ? `今日 ${formatDuration(total, true)}`
+    : activePeriod === "month" ? `周均 ${formatDuration(average, true)}` : `日均 ${formatDuration(average, true)}`;
 }
 
 function renderRewards() {
@@ -616,11 +826,13 @@ function renderRewards() {
 
 function renderNotes() {
   const textarea = document.querySelector("#dailyNote");
+  state.dailyNotes[localDateKey()] ||= dailyNoteTemplate();
+  state.dailyNote = state.dailyNotes[localDateKey()];
   if (document.activeElement !== textarea) textarea.value = state.dailyNote;
-  document.querySelector("#linkedTaskList").innerHTML = state.tasks.slice(0, 6).map((task, index) => `
+  document.querySelector("#linkedTaskList").innerHTML = todayTasks().slice(0, 6).map((task, index) => `
     <div class="linked-task" style="--task-color:${MODULE_COLORS[index % MODULE_COLORS.length]}">
       <i></i><strong>${escapeHTML(task.title)}</strong><span>${task.progress}%</span>
-    </div>`).join("");
+    </div>`).join("") || `<div class="empty-state compact"><strong>今天暂无关联计划</strong><p>添加计划后会显示在这里。</p></div>`;
 }
 
 function renderAll() {
@@ -694,7 +906,7 @@ function completeTask(task) {
   const earned = awardTask(task) + maybeAwardDailyGoal();
   if (state.timer.taskId === task.id) {
     pauseTimer();
-    const next = state.tasks.find((item) => !item.done);
+    const next = todayTasks().find((item) => !item.done);
     state.timer.taskId = next?.id || null;
     state.timer.elapsedSeconds = next?.actualSeconds || 0;
   }
@@ -714,6 +926,42 @@ function toggleTask(task) {
   saveState();
   renderAll();
   showToast("任务已恢复", "原有积分记录会保留，但再次完成不会重复计分。", "info");
+}
+
+function setTaskFilter(filter) {
+  activeTaskFilter = ["all", "pending", "done", "overdue", "scheduled", "history"].includes(filter) ? filter : "all";
+  document.querySelectorAll("[data-task-filter]").forEach((item) => item.classList.toggle("active", item.dataset.taskFilter === activeTaskFilter));
+  renderTasks();
+}
+
+function carryTaskToToday(task) {
+  if (!task || task.done || task.archived || !overdueTasks().some((item) => item.id === task.id)) return;
+  const now = new Date();
+  const due = new Date(now.getTime() + Math.max(1, Number(task.plannedMinutes) || 1) * 60_000);
+  const carriedTask = {
+    ...task,
+    id: uid("task"),
+    startAt: now.toISOString(),
+    dueAt: due.toISOString(),
+    actualSeconds: 0,
+    progress: 0,
+    done: false,
+    archived: false,
+    rewarded: false,
+    carriedFromTaskId: task.id,
+    note: `${task.note ? `${task.note}\n\n` : ""}从 ${formatDay(task.startAt)} 顺延；原记录为 ${task.progress}% / ${Math.round(taskActualMinutes(task))} 分钟。`
+  };
+  delete carriedTask.completedAt;
+  delete carriedTask.carriedForwardAt;
+  delete carriedTask.carriedForwardToTaskId;
+  task.archived = true;
+  task.carriedForwardAt = now.toISOString();
+  task.carriedForwardToTaskId = carriedTask.id;
+  state.tasks.unshift(carriedTask);
+  saveState();
+  renderAll();
+  setTaskFilter("all");
+  showToast("已移至今天", `${task.title}从现在开始重新计时；昨日进度已保留在历史记录。`, "success");
 }
 
 function startTask(task) {
@@ -801,7 +1049,7 @@ function deleteCurrentTask() {
   if (state.timer.taskId === id) pauseTimer();
   state.tasks = state.tasks.filter((item) => item.id !== id);
   if (state.timer.taskId === id) {
-    state.timer.taskId = state.tasks.find((item) => !item.done)?.id || null;
+    state.timer.taskId = todayTasks().find((item) => !item.done)?.id || null;
     state.timer.elapsedSeconds = state.tasks.find((item) => item.id === state.timer.taskId)?.actualSeconds || 0;
   }
   document.querySelector("#taskDialog").close();
@@ -838,12 +1086,19 @@ function requestNotifications() {
 function checkReminders() {
   if (!state.settings.reminderMode) return;
   const now = Date.now();
-  state.tasks.filter((task) => !task.done).forEach((task) => {
+  const todayKey = localDateKey();
+  const overdue = overdueTasks();
+  const overdueKey = `overdue-summary:${todayKey}`;
+  if (overdue.length && !state.remindersSeen[overdueKey]) {
+    state.remindersSeen[overdueKey] = true;
+    showToast("有过往任务待处理", `${overdue.length} 项计划已放入逾期区；可以逐项移至今天，不会污染今日进度。`, "reminder");
+  }
+  todayTasks().filter((task) => !task.done).forEach((task) => {
     const due = new Date(task.dueAt).getTime();
     const minutesUntil = (due - now) / 60_000;
     const kind = minutesUntil <= 0 ? "due" : minutesUntil <= 15 ? "soon" : null;
     if (!kind) return;
-    const key = `${task.id}:${kind}:${localDateKey()}`;
+    const key = `${task.id}:${kind}:${todayKey}`;
     if (state.remindersSeen[key]) return;
     state.remindersSeen[key] = true;
     const title = kind === "due" ? "DDL 已到" : "还有 15 分钟到 DDL";
@@ -920,12 +1175,11 @@ function importData(file) {
   reader.onload = () => {
     try {
       const parsed = JSON.parse(reader.result);
-      if (parsed.version !== 1 || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.apps)) throw new Error("invalid");
-      state = parsed;
-      state.timer.running = false;
-      state.timer.lastStartedAt = null;
-      state.appMonitor.running = false;
+      if (![1, STATE_VERSION].includes(parsed.version) || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.apps)) throw new Error("invalid");
+      state = normalizeState(parsed);
+      activeDateKey = localDateKey();
       saveState();
+      setTodayLabel();
       renderAll();
       document.querySelector("#settingsDialog").close();
       showToast("导入成功", "Demo 数据已经恢复。", "success");
@@ -939,6 +1193,8 @@ function importData(file) {
 function resetData() {
   if (!window.confirm("确定恢复初始 Demo 数据吗？你当前的本地修改将被清除。")) return;
   state = createInitialState();
+  activeDateKey = localDateKey();
+  activeTaskFilter = "all";
   saveState();
   document.querySelector("#settingsDialog").close();
   renderAll();
@@ -961,6 +1217,7 @@ function persistNote() {
   window.clearTimeout(noteSaveTimer);
   noteSaveTimer = window.setTimeout(() => {
     state.dailyNote = document.querySelector("#dailyNote").value;
+    state.dailyNotes[localDateKey()] = state.dailyNote;
     saveState();
     status.innerHTML = `<i></i>已自动保存`;
   }, 420);
@@ -972,6 +1229,7 @@ function focusTaskNote() {
   const heading = `\n### ${task?.module || "学习记录"} · ${task?.title || "新记录"}\n`;
   if (task && !state.dailyNote.includes(`### ${task.module} · ${task.title}`)) {
     state.dailyNote += `${heading}${task.note || ""}\n`;
+    state.dailyNotes[localDateKey()] = state.dailyNote;
     saveState();
     renderNotes();
   }
@@ -981,12 +1239,8 @@ function focusTaskNote() {
 function wireEvents() {
   document.querySelectorAll(".nav-item").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.view)));
   document.querySelectorAll("[data-jump]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.jump)));
-  document.querySelectorAll("[data-task-filter]").forEach((button) => button.addEventListener("click", () => {
-    document.querySelectorAll("[data-task-filter]").forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    activeTaskFilter = button.dataset.taskFilter;
-    renderTasks();
-  }));
+  document.querySelectorAll("[data-task-filter]").forEach((button) => button.addEventListener("click", () => setTaskFilter(button.dataset.taskFilter)));
+  document.querySelector("#showOverdueButton").addEventListener("click", () => setTaskFilter("overdue"));
   document.querySelectorAll("[data-period]").forEach((button) => button.addEventListener("click", () => {
     document.querySelectorAll("[data-period]").forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
@@ -1024,6 +1278,7 @@ function wireEvents() {
     if (action === "toggle-task") toggleTask(task);
     if (action === "edit-task") openTaskDialog(task);
     if (action === "start-task") startTask(task);
+    if (action === "carry-task") carryTaskToToday(task);
   });
 
   document.querySelector("#appUsageTable").addEventListener("click", (event) => {
@@ -1069,7 +1324,29 @@ function wireEvents() {
   });
 }
 
+function handleDateBoundary() {
+  const nextDateKey = localDateKey();
+  if (nextDateKey === activeDateKey) return false;
+  const nextMidnight = new Date(`${dateKeyOffset(activeDateKey, 1)}T00:00:00`).getTime();
+  syncTimerToTask(Math.min(Date.now(), nextMidnight));
+  state.timer.running = false;
+  state.timer.lastStartedAt = null;
+  state.timer.taskId = null;
+  state.timer.elapsedSeconds = 0;
+  rollStateToDate(state, nextDateKey);
+  activeDateKey = nextDateKey;
+  activeTaskFilter = "all";
+  saveState();
+  setTodayLabel();
+  renderAll();
+  document.querySelectorAll("[data-task-filter]").forEach((item) => item.classList.toggle("active", item.dataset.taskFilter === "all"));
+  showToast("新的一天已开始", "昨日记录已归档；今日时间、进度和应用用时已重新计算。", "success");
+  checkReminders();
+  return true;
+}
+
 function runTick() {
+  if (handleDateBoundary()) return;
   tickCounter += 1;
   if (state.timer.running) {
     syncTimerToTask();
@@ -1098,7 +1375,9 @@ function runTick() {
 }
 
 function registerServiceWorker() {
-  if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("./sw.js").catch(() => {});
+  if ("serviceWorker" in navigator && location.protocol !== "file:") {
+    navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((registration) => registration.update()).catch(() => {});
+  }
 }
 
 function registerWebMCPTools() {
@@ -1119,11 +1398,14 @@ function registerWebMCPTools() {
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute() {
+      const currentTasks = todayTasks();
       return {
-        tasks: state.tasks.map((task) => ({ id: task.id, title: task.title, module: task.module, kind: task.kind, progress: task.progress, done: task.done, plannedMinutes: task.plannedMinutes, actualMinutes: Math.round(taskActualMinutes(task)), dueAt: task.dueAt })),
-        actualMinutes: Math.round(totalActualMinutes()),
-        weightedProgress: weightedProgress(),
-        points: state.points
+        date: localDateKey(),
+        tasks: currentTasks.map((task) => ({ id: task.id, title: task.title, module: task.module, kind: task.kind, progress: task.progress, done: task.done, plannedMinutes: task.plannedMinutes, actualMinutes: Math.round(taskActualMinutes(task)), dueAt: task.dueAt })),
+        actualMinutes: Math.round(totalActualMinutes(currentTasks)),
+        weightedProgress: weightedProgress(currentTasks),
+        points: state.points,
+        overdueCount: overdueTasks().length
       };
     }
   });
@@ -1169,6 +1451,7 @@ function registerWebMCPTools() {
       const task = state.tasks.find((item) => item.id === input?.taskId);
       if (!task) throw new Error("task not found");
       if (task.done) throw new Error("completed tasks cannot be started");
+      if (task.archived || taskDateKey(task) !== localDateKey()) throw new Error("carry the task to today before starting it");
       startTask(task);
       return { taskId: task.id, status: "running", elapsedSeconds: currentTimerSeconds() };
     }

@@ -430,6 +430,53 @@ h2 {
   margin-bottom: 18px;
 }
 
+.day-boundary-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -2px 0 18px;
+  padding: 11px 14px;
+  color: var(--muted-bright);
+  background: rgba(255, 189, 103, 0.065);
+  border: 1px solid rgba(255, 189, 103, 0.18);
+  border-radius: 12px;
+}
+
+.day-boundary-notice[hidden] {
+  display: none;
+}
+
+.day-boundary-notice > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--orange);
+  background: rgba(255, 189, 103, 0.1);
+  border-radius: 8px;
+}
+
+.day-boundary-notice p {
+  flex: 1;
+  margin: 0;
+}
+
+.day-boundary-notice strong,
+.day-boundary-notice small {
+  display: block;
+}
+
+.day-boundary-notice strong {
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.day-boundary-notice small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
 .metric-card,
 .panel,
 .focus-card {
@@ -726,6 +773,7 @@ h2 {
 
 .segmented-control {
   display: flex;
+  flex-wrap: wrap;
   padding: 3px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--line);
@@ -823,6 +871,15 @@ h2 {
   text-decoration: line-through;
 }
 
+.task-row.overdue {
+  background: rgba(255, 189, 103, 0.025);
+  border-color: rgba(255, 189, 103, 0.12);
+}
+
+.task-row.archived {
+  opacity: 0.78;
+}
+
 .task-side {
   display: flex;
   align-items: center;
@@ -863,6 +920,24 @@ h2 {
 .task-start:hover {
   color: #062129;
   background: var(--cyan);
+}
+
+.carry-task-button {
+  min-height: 28px;
+  padding: 0 9px;
+  color: var(--orange);
+  background: rgba(255, 189, 103, 0.08);
+  border: 1px solid rgba(255, 189, 103, 0.16);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.64rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.carry-task-button:hover {
+  color: #241606;
+  background: var(--orange);
 }
 
 .empty-state {
@@ -2354,6 +2429,17 @@ h2 {
   .summary-grid,
   .today-side-column {
     grid-template-columns: 1fr;
+  }
+
+  .day-boundary-notice {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .day-boundary-notice .text-button {
+    width: 100%;
+    margin-left: 40px;
+    text-align: left;
   }
 
   .analytics-grid,

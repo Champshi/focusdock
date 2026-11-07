@@ -1,4 +1,4 @@
-const CACHE_NAME = "focusdock-demo-v1";
+const CACHE_NAME = "focusdock-demo-v2";
 const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./favicon.svg", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -16,7 +16,7 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: "no-store" })
       .then((response) => {
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
